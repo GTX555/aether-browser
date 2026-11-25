@@ -26,10 +26,10 @@ An ultra-lightweight, memory-saving, privacy-first, minimalist native Windows we
 - **Minimalist Single-Line UI & 75+ Searchable Settings (`aether://settings`)**:
   - Unified single-line top bar with compact pill address bar, dynamically compressing uniform tabs, smooth animated drag-reorder & tear-off/dock-back between windows, right-aligned popups, optional vertical sidebar tabs, and Dark / AMOLED / Light themes.
   - **Set as Default Browser** Windows registration, toolbar customization, permissions manager, and JSON Export/Import.
-- **Professional Native Setup Wizard & Git Auto-Updater**:
-  - Custom minimalist dark-grey WPF installer ([AetherBrowser-Setup.exe](dist/releases/AetherBrowser-Setup.exe)) with Welcome, Customize (install folder, Desktop/Start Menu shortcuts, Windows Default Apps registration), live extraction progress bar, standalone Windows Add/Remove Programs uninstaller (`AetherUninstall.exe`), and silent self-update mode (`--silent --wait-pid --relaunch`).
-  - Scans your **Git / GitHub repository** (`owner/repo`, full URL, Releases, Git Tags, or raw `releases.json`) automatically on startup or on demand via **Settings → Updates & About → Scan for Updates**.
-  - Includes a ready-to-use GitHub Actions workflow (`.github/workflows/release.yml`) and `scripts/publish-release.ps1` so pushing a git tag (`v2.2.0`) automatically builds and publishes a new GitHub Release.
+- **Native Windows NSIS Installer & Git Auto-Updater**:
+  - Classic native Windows **NSIS MUI2** installer (`AetherBrowser-Setup.exe`) with per-user / all-users option, custom install directory picker, native progress bar, Desktop & Start Menu shortcuts, Windows Installed Apps uninstaller, Windows Default Browser registration, solid LZMA compression, and silent self-update support (`/S /RELAUNCH`).
+  - Pre-configured to scan **`GTX555/aether-browser`** on GitHub Releases automatically on startup or via **Settings → Updates & About → Scan for Updates**.
+  - Includes `.github/workflows/release.yml` and `scripts/publish-release.ps1` so pushing a `v*.*.*` git tag automatically builds and publishes a new GitHub Release.
 - **Real Open-Source Vector Icons & Neutral Grey Theme**:
   - Uses 62 genuine **Lucide** SVG vector icons across the entire browser UI and internal pages, styled in a pure neutral dark-graphite grey palette (zero violet tint).
 

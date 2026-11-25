@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 2.1.0)"
+        description: "Release version (e.g. 2.2.0)"
         required: true
-        default: "2.1.0"
+        default: "2.2.0"
 
 permissions:
   contents: write
@@ -38,7 +38,7 @@ jobs:
           echo "version=$v" >> $env:GITHUB_OUTPUT
           echo "tag=v$v" >> $env:GITHUB_OUTPUT
 
-      - name: Build Professional Installer & Portable Release
+      - name: Build Native NSIS Installer & Portable Release
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version "${{ steps.ver.outputs.version }}" -CleanReleases

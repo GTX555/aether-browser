@@ -6,7 +6,7 @@ namespace AetherBrowser.Models;
 public sealed class BrowserSettings
 {
     // --- Schema ---
-    public int SettingsSchemaVersion { get; set; } = 2;
+    public int SettingsSchemaVersion { get; set; } = 3;
 
     // --- General ---
     public string Language { get; set; } = "en";
@@ -135,7 +135,7 @@ public sealed class BrowserSettings
     public string UpdateCheckFrequency { get; set; } = "EveryStartup"; // EveryStartup, Daily, Weekly, Manual
     public bool AutoDownloadUpdates { get; set; } = false;
     public bool IncludePreReleases { get; set; } = false;
-    public string GitHubRepository { get; set; } = "";
+    public string GitHubRepository { get; set; } = "GTX555/aether-browser";
     public string CustomUpdateFeedUrl { get; set; } = "";
     public DateTime? LastUpdateCheckUtc { get; set; } = null;
 

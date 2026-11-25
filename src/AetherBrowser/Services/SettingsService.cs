@@ -38,6 +38,7 @@ public sealed class SettingsService
                 var loaded = JsonSerializer.Deserialize<BrowserSettings>(json, JsonOptions);
                 if (loaded is not null)
                 {
+                    var migrated = false;
                     // Migrate v1 violet default accent (#6366F1) to neutral architectural grey (#A1A1AA)
                     if (loaded.SettingsSchemaVersion < 2)
                     {
@@ -46,9 +47,18 @@ public sealed class SettingsService
                         {
                             loaded.AccentColor = "#A1A1AA";
                         }
-                        loaded.SettingsSchemaVersion = 2;
-                        SaveInternal(loaded);
+                        migrated = true;
                     }
+                    // Migrate v2 empty GitHub repo to official GTX555/aether-browser
+                    if (loaded.SettingsSchemaVersion < 3)
+                    {
+                        if (string.IsNullOrWhiteSpace(loaded.GitHubRepository))
+                            loaded.GitHubRepository = "GTX555/aether-browser";
+                        loaded.SettingsSchemaVersion = 3;
+                        migrated = true;
+                    }
+                    if (migrated)
+                        SaveInternal(loaded);
                     return loaded;
                 }
             }

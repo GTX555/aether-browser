@@ -5,8 +5,6 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
-using Velopack;
-using Velopack.Sources;
 using BrowserUpdateInfo = AetherBrowser.Models.UpdateInfo;
 
 namespace AetherBrowser.Services;
@@ -14,8 +12,6 @@ namespace AetherBrowser.Services;
 public sealed class UpdateService
 {
     private readonly SettingsService _settings;
-    private Velopack.UpdateInfo? _pendingVelopackInfo;
-    private UpdateManager? _velopackManager;
 
     public BrowserUpdateInfo LastInfo { get; private set; }
     public event Action<BrowserUpdateInfo>? UpdateStatusChanged;
@@ -26,7 +22,7 @@ public sealed class UpdateService
         get
         {
             var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            return ver is null ? "2.1.0" : $"{ver.Major}.{ver.Minor}.{ver.Build}";
+            return ver is null ? "2.2.0" : $"{ver.Major}.{ver.Minor}.{ver.Build}";
         }
     }
 
@@ -86,7 +82,7 @@ public sealed class UpdateService
                 CurrentVersion = CurrentVersion,
                 LatestVersion = CurrentVersion,
                 IsUpdateAvailable = false,
-                StatusMessage = "No Git repository configured. Enter owner/repo (or full GitHub URL) in Settings → Updates.",
+                StatusMessage = "No Git repository configured. Enter owner/repo in Settings → Updates.",
                 CheckedUtc = DateTime.UtcNow
             };
             UpdateStatusChanged?.Invoke(LastInfo);
@@ -108,58 +104,7 @@ public sealed class UpdateService
             }
         }
 
-        // 2. Velopack delta feed if installed via Velopack
-        try
-        {
-            IUpdateSource? source = !string.IsNullOrEmpty(customUrl)
-                ? new SimpleWebSource(customUrl)
-                : new GithubSource($"https://github.com/{repo}", null, s.IncludePreReleases);
-
-            var mgr = new UpdateManager(source);
-            if (mgr.IsInstalled)
-            {
-                var vInfo = await mgr.CheckForUpdatesAsync();
-                _settings.Update(cfg => cfg.LastUpdateCheckUtc = DateTime.UtcNow);
-                if (vInfo is not null)
-                {
-                    _velopackManager = mgr;
-                    _pendingVelopackInfo = vInfo;
-                    LastInfo = new BrowserUpdateInfo
-                    {
-                        IsUpdateAvailable = true,
-                        CurrentVersion = CurrentVersion,
-                        LatestVersion = vInfo.TargetFullRelease.Version.ToString(),
-                        ReleaseNotes = vInfo.TargetFullRelease.NotesMarkdown ?? "New Aether Browser release available.",
-                        StatusMessage = $"Update v{vInfo.TargetFullRelease.Version} is available!",
-                        IsVelopackUpdate = true,
-                        CheckedUtc = DateTime.UtcNow
-                    };
-                    UpdateStatusChanged?.Invoke(LastInfo);
-
-                    if (s.AutoDownloadUpdates && !manual)
-                        _ = DownloadAndApplyUpdateAsync(autoRestart: false);
-
-                    return LastInfo;
-                }
-
-                LastInfo = new BrowserUpdateInfo
-                {
-                    IsUpdateAvailable = false,
-                    CurrentVersion = CurrentVersion,
-                    LatestVersion = CurrentVersion,
-                    StatusMessage = $"Aether Browser v{CurrentVersion} is up to date.",
-                    CheckedUtc = DateTime.UtcNow
-                };
-                UpdateStatusChanged?.Invoke(LastInfo);
-                return LastInfo;
-            }
-        }
-        catch
-        {
-            // Fall through to GitHub Releases & Git Tags API check
-        }
-
-        // 3. GitHub Releases API (+ Git Tags fallback) — works in Installer, Portable & Dev builds!
+        // 2. GitHub Releases API (+ Git Tags fallback)
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
@@ -221,6 +166,8 @@ public sealed class UpdateService
                             CheckedUtc = DateTime.UtcNow
                         };
                         UpdateStatusChanged?.Invoke(LastInfo);
+                        if (isNewer && s.AutoDownloadUpdates && !manual)
+                            _ = DownloadAndApplyUpdateAsync(autoRestart: false);
                         return LastInfo;
                     }
                 }
@@ -271,7 +218,7 @@ public sealed class UpdateService
                 {
                     CurrentVersion = CurrentVersion,
                     LatestVersion = CurrentVersion,
-                    StatusMessage = $"No releases or version tags found yet at github.com/{repo} (HTTP {(int)response.StatusCode}).",
+                    StatusMessage = $"No releases found yet at github.com/{repo} (HTTP {(int)response.StatusCode}).",
                     CheckedUtc = DateTime.UtcNow
                 };
                 UpdateStatusChanged?.Invoke(LastInfo);
@@ -333,21 +280,6 @@ public sealed class UpdateService
 
     public async Task<(bool Ok, string Message)> DownloadAndApplyUpdateAsync(bool autoRestart = true)
     {
-        if (LastInfo.IsVelopackUpdate && _velopackManager is not null && _pendingVelopackInfo is not null)
-        {
-            try
-            {
-                await _velopackManager.DownloadUpdatesAsync(_pendingVelopackInfo, p => DownloadProgressChanged?.Invoke(p));
-                if (autoRestart)
-                    _velopackManager.ApplyUpdatesAndRestart(_pendingVelopackInfo);
-                return (true, "Update downloaded and ready to apply.");
-            }
-            catch (Exception ex)
-            {
-                return (false, $"Velopack update failed: {ex.Message}");
-            }
-        }
-
         if (!string.IsNullOrEmpty(LastInfo.DownloadUrl))
         {
             try
@@ -377,16 +309,16 @@ public sealed class UpdateService
                 DownloadProgressChanged?.Invoke(100);
 
                 var currentDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
-                var pid = Environment.ProcessId;
+                // Standard NSIS flags: /S (silent) /RELAUNCH /D=<dir> (must be last, unquoted per NSIS spec!)
                 var args = autoRestart
-                    ? $"--silent --wait-pid {pid} --dir \"{currentDir}\" --relaunch"
-                    : $"--dir \"{currentDir}\"";
+                    ? $"/S /RELAUNCH /D={currentDir}"
+                    : $"/D={currentDir}";
 
                 Process.Start(new ProcessStartInfo(tempPath, args) { UseShellExecute = true });
                 if (autoRestart)
                     Application.Current?.Dispatcher.BeginInvoke(() => Application.Current.Shutdown());
 
-                return (true, "Update downloaded — applying and restarting...");
+                return (true, "Update downloaded — installing and restarting...");
             }
             catch (Exception ex)
             {
