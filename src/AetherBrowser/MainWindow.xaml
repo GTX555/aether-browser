@@ -130,6 +130,7 @@
                                          Padding="2,0"
                                          GotFocus="AddressBox_GotFocus"
                                          LostFocus="AddressBox_LostFocus"
+                                         LostKeyboardFocus="AddressBox_LostFocus"
                                          PreviewMouseLeftButtonDown="AddressBox_PreviewMouseLeftButtonDown"
                                          PreviewKeyDown="AddressBox_PreviewKeyDown"
                                          TextChanged="AddressBox_TextChanged"/>

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Windows;
+using System.Windows.Input;
 using AetherBrowser.Models;
 using CefSharp;
 using CefSharp.Handler;
@@ -568,5 +569,72 @@ public sealed class AetherJsBridge
         browser.JavascriptObjectRepository.Settings.LegacyBindingEnabled = true;
         browser.JavascriptObjectRepository.Register(ObjectName, bridge, options: BindingOptions.DefaultBinder);
         return bridge;
+    }
+}
+
+/// <summary>
+/// Intercepts global browser keyboard shortcuts directly inside CEF before webpages consume them
+/// (ensures Ctrl+T, Ctrl+W, Ctrl+R, F5, Ctrl+L, Ctrl+Tab, Ctrl+1..9, etc. work even when a webpage has focus).
+/// </summary>
+public sealed class AetherKeyboardHandler : KeyboardHandler
+{
+    private readonly Func<Key, bool, bool, bool, bool> _isHandledShortcut;
+    private readonly Action<Key, bool, bool, bool> _onShortcut;
+
+    public AetherKeyboardHandler(
+        Func<Key, bool, bool, bool, bool> isHandledShortcut,
+        Action<Key, bool, bool, bool> onShortcut)
+    {
+        _isHandledShortcut = isHandledShortcut;
+        _onShortcut = onShortcut;
+    }
+
+    protected override bool OnPreKeyEvent(
+        IWebBrowser chromiumWebBrowser,
+        IBrowser browser,
+        KeyType type,
+        int windowsKeyCode,
+        int nativeKeyCode,
+        CefEventFlags modifiers,
+        bool isSystemKey,
+        ref bool isKeyboardShortcut)
+    {
+        if (type != KeyType.RawKeyDown && type != KeyType.KeyUp)
+            return false;
+
+        var ctrl = (modifiers & CefEventFlags.ControlDown) != 0;
+        var shift = (modifiers & CefEventFlags.ShiftDown) != 0;
+        var alt = (modifiers & CefEventFlags.AltDown) != 0;
+
+        // Never swallow AltGr (Ctrl+Alt on European/German keyboards for @, €, [, ], {, }, \)
+        if (ctrl && alt)
+            return false;
+
+        var key = KeyInterop.KeyFromVirtualKey(windowsKeyCode);
+        if (key == Key.None)
+            return false;
+
+        if (!_isHandledShortcut(key, ctrl, shift, alt))
+            return false;
+
+        isKeyboardShortcut = true;
+        if (type == KeyType.RawKeyDown)
+            _onShortcut(key, ctrl, shift, alt);
+        return true;
+    }
+}
+
+/// <summary>
+/// Notifies WPF when the embedded CEF HWND takes keyboard focus (e.g., clicking into a webpage)
+/// so the address bar clears its focus ring immediately.
+/// </summary>
+public sealed class AetherFocusHandler : CefSharp.Wpf.HwndHost.FocusHandler
+{
+    public event Action? BrowserGotFocus;
+
+    protected override void OnGotFocus(IWebBrowser chromiumWebBrowser, IBrowser browser)
+    {
+        base.OnGotFocus(chromiumWebBrowser, browser);
+        BrowserGotFocus?.Invoke();
     }
 }

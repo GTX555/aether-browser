@@ -46,6 +46,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private int _highlightedAutocompleteIndex = -1;
     private double _effectiveTabWidth = 156;
     private string? _lastFindQuery;
+    private volatile bool _isFindBarOpen;
+    private static readonly SolidColorBrush BookmarkYellowBrush = CreateFrozenBrush(Color.FromRgb(0xFA, 0xCC, 0x15));
+
+    private static SolidColorBrush CreateFrozenBrush(Color color)
+    {
+        var b = new SolidColorBrush(color);
+        b.Freeze();
+        return b;
+    }
 
     // Tab drag & tear-off state
     private BrowserTab? _dragCandidateTab;
@@ -137,8 +146,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
-        Deactivated += (_, _) => { AutocompletePopup.IsOpen = false; CancelTabDrag(); };
+        Deactivated += (_, _) => { ClearAddressBarFocus(); CancelTabDrag(); };
         LocationChanged += (_, _) => { if (AutocompletePopup.IsOpen) AutocompletePopup.IsOpen = false; };
+        PreviewMouseDown += Window_PreviewMouseDown;
         PreviewKeyDown += MainWindow_PreviewKeyDown;
         MouseMove += Window_TabDragMouseMove;
         PreviewMouseLeftButtonUp += Window_TabDragMouseUp;
@@ -593,6 +603,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         browser.DisplayHandler = displayHandler;
 
         browser.PermissionHandler = new AetherPermissionHandler();
+        browser.KeyboardHandler = new AetherKeyboardHandler(
+            IsBrowserShortcut,
+            (key, ctrl, shift, alt) => Dispatcher.BeginInvoke(async () => await ExecuteBrowserShortcutAsync(key, ctrl, shift, alt)));
+
+        var focusHandler = new AetherFocusHandler();
+        focusHandler.BrowserGotFocus += () => Dispatcher.BeginInvoke(ClearAddressBarFocus);
+        browser.FocusHandler = focusHandler;
 
         var jsBridge = AetherJsBridge.RegisterOn(browser);
         jsBridge.MessageReceived += json =>
@@ -1453,7 +1470,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateBookmarkStar(BrowserTab tab)
     {
         var bookmarked = !tab.IsBlankTab && !tab.IsInternalPage && App.DataStore.IsBookmarked(tab.Url);
-        BookmarkIcon.IconBrush = bookmarked ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
+        BookmarkIcon.IconBrush = bookmarked ? BookmarkYellowBrush : (Brush)FindResource("MutedBrush");
+        BookmarkIcon.FillBrush = bookmarked ? BookmarkYellowBrush : Brushes.Transparent;
     }
 
     private void UpdateZoomUi(double factor)
@@ -1487,6 +1505,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     // ==================== ADDRESS BAR & AUTOCOMPLETE ====================
+
+    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (AddressBox.IsKeyboardFocusWithin || AddressBarBorder.BorderBrush != (Brush)FindResource("BorderBrush"))
+        {
+            if (e.OriginalSource is DependencyObject src && !IsDescendantOf(src, AddressBarBorder))
+            {
+                if (!AutocompletePopup.IsOpen || !AutocompletePopup.IsMouseOver)
+                    ClearAddressBarFocus();
+            }
+        }
+    }
+
+    private static bool IsDescendantOf(DependencyObject? child, DependencyObject ancestor)
+    {
+        var cur = child;
+        while (cur is not null)
+        {
+            if (cur == ancestor) return true;
+            cur = VisualTreeHelper.GetParent(cur) ?? LogicalTreeHelper.GetParent(cur);
+        }
+        return false;
+    }
+
+    private void ClearAddressBarFocus()
+    {
+        AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
+        AutocompletePopup.IsOpen = false;
+        _highlightedAutocompleteIndex = -1;
+        if (AddressBox.IsKeyboardFocusWithin)
+            Keyboard.ClearFocus();
+        SyncToolbarToActiveTab(forceAddressUpdate: true);
+    }
 
     private void AddressBox_GotFocus(object sender, RoutedEventArgs e)
     {
@@ -1713,6 +1764,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
+            AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
+            Keyboard.ClearFocus();
             e.Handled = true;
             var active = _activeTab;
             await NavigateTabAsync(active, target);
@@ -1720,9 +1773,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else if (e.Key == Key.Escape)
         {
-            AutocompletePopup.IsOpen = false;
-            _highlightedAutocompleteIndex = -1;
-            SyncToolbarToActiveTab();
+            ClearAddressBarFocus();
             _activeTab?.Browser?.Focus();
             e.Handled = true;
         }
@@ -1744,6 +1795,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             e.Handled = true;
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
+            AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
+            Keyboard.ClearFocus();
             var active = _activeTab;
             await NavigateTabAsync(active, url);
             active.Browser?.Focus();
@@ -1752,42 +1805,126 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     // ==================== KEYBOARD SHORTCUTS ====================
 
+    private bool IsBrowserShortcut(Key key, bool ctrl, bool shift, bool alt)
+    {
+        if (ctrl && alt) return false; // Preserve AltGr
+
+        if (ctrl && !alt)
+        {
+            if (key is Key.T or Key.W or Key.F4 or Key.N or Key.L or Key.R or Key.F or Key.D or Key.H or Key.J
+                or Key.OemComma or Key.Tab or Key.PageUp or Key.PageDown
+                or Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract or Key.D0 or Key.NumPad0)
+                return true;
+
+            if (!shift && key >= Key.D1 && key <= Key.D9)
+                return true;
+        }
+
+        if (alt && !ctrl && !shift && key is Key.D or Key.Left or Key.Right)
+            return true;
+
+        if (!ctrl && !alt && !shift && key is Key.F5 or Key.F11 or Key.F12)
+            return true;
+
+        if (!ctrl && !alt && !shift && key == Key.Escape && _isFindBarOpen)
+            return true;
+
+        return false;
+    }
+
+    private async Task ExecuteBrowserShortcutAsync(Key key, bool ctrl, bool shift, bool alt)
+    {
+        if (ctrl && !alt)
+        {
+            if (!shift && key == Key.T) { await CreateTabAsync(App.SettingsService.Current.GetNewTabUrl(), true); return; }
+            if (shift && key == Key.T) { if (_closedTabs.TryPop(out var u)) await CreateTabAsync(u, true); return; }
+            if (!shift && (key == Key.W || key == Key.F4)) { if (_activeTab is not null) await CloseTabAsync(_activeTab); return; }
+            if (!shift && key == Key.N) { new MainWindow(false).Show(); return; }
+            if (shift && key == Key.N) { new MainWindow(true).Show(); return; }
+            if (key == Key.L) { FocusAddressBar(); return; }
+            if (key == Key.R)
+            {
+                if (shift && _activeTab?.Browser is { IsDisposed: false, IsBrowserInitialized: true } b && !_activeTab.IsInternalPage && !_activeTab.IsBlankTab)
+                {
+                    UpdateAddressProgress(0.08, isLoading: true);
+                    b.Reload(ignoreCache: true);
+                }
+                else
+                {
+                    ReloadButton_Click(this, new RoutedEventArgs());
+                }
+                return;
+            }
+            if (key == Key.F) { OpenFindBar(); return; }
+            if (key == Key.D) { ToggleBookmark_Click(this, new RoutedEventArgs()); return; }
+            if (key == Key.H) { await OpenOrSwitchInternalTabAsync("aether://history"); return; }
+            if (key == Key.J) { await OpenOrSwitchInternalTabAsync("aether://downloads"); return; }
+            if (key == Key.OemComma) { await OpenOrSwitchInternalTabAsync("aether://settings"); return; }
+            if (key == Key.Tab) { await CycleTabAsync(shift ? -1 : 1); return; }
+            if (key == Key.PageDown) { await CycleTabAsync(1); return; }
+            if (key == Key.PageUp) { await CycleTabAsync(-1); return; }
+            if (key is Key.OemPlus or Key.Add) { AdjustZoom(0.1); return; }
+            if (key is Key.OemMinus or Key.Subtract) { AdjustZoom(-0.1); return; }
+            if (key is Key.D0 or Key.NumPad0) { SetZoom(1.0); return; }
+            if (!shift && key >= Key.D1 && key <= Key.D9)
+            {
+                var idx = key == Key.D9 ? _tabs.Count - 1 : (key - Key.D1);
+                if (idx >= 0 && idx < _tabs.Count)
+                    await SelectTabAsync(_tabs[idx]);
+                return;
+            }
+        }
+
+        if (alt && !ctrl && !shift)
+        {
+            if (key == Key.D) { FocusAddressBar(); return; }
+            if (key == Key.Left) { BackButton_Click(this, new RoutedEventArgs()); return; }
+            if (key == Key.Right) { ForwardButton_Click(this, new RoutedEventArgs()); return; }
+        }
+
+        if (!ctrl && !alt && !shift)
+        {
+            if (key == Key.F5) { ReloadButton_Click(this, new RoutedEventArgs()); return; }
+            if (key == Key.F11) { ToggleFullscreen(); return; }
+            if (key == Key.F12)
+            {
+                if (_activeTab?.Browser is { IsDisposed: false, IsBrowserInitialized: true } b)
+                    b.ShowDevTools();
+                return;
+            }
+            if (key == Key.Escape && _isFindBarOpen) { CloseFindBar(); return; }
+        }
+    }
+
+    private void FocusAddressBar()
+    {
+        if (!IsActive) Activate();
+        Keyboard.Focus(AddressBox);
+        AddressBox.Focus();
+        AddressBox.SelectAll();
+    }
+
+    private void OpenFindBar()
+    {
+        _isFindBarOpen = true;
+        FindBar.Visibility = Visibility.Visible;
+        if (!IsActive) Activate();
+        Keyboard.Focus(FindBox);
+        FindBox.Focus();
+        FindBox.SelectAll();
+    }
+
     private async void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         var alt = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        if (ctrl && !shift && e.Key == Key.T) { e.Handled = true; await CreateTabAsync(App.SettingsService.Current.GetNewTabUrl(), true); }
-        else if (ctrl && shift && e.Key == Key.T) { e.Handled = true; if (_closedTabs.TryPop(out var u)) await CreateTabAsync(u, true); }
-        else if (ctrl && !shift && e.Key == Key.W) { e.Handled = true; if (_activeTab is not null) await CloseTabAsync(_activeTab); }
-        else if (ctrl && !shift && e.Key == Key.N) { e.Handled = true; new MainWindow(false).Show(); }
-        else if (ctrl && shift && e.Key == Key.N) { e.Handled = true; new MainWindow(true).Show(); }
-        else if ((ctrl && e.Key == Key.L) || (alt && e.Key == Key.D)) { e.Handled = true; AddressBox.Focus(); AddressBox.SelectAll(); }
-        else if ((ctrl && e.Key == Key.R) || e.Key == Key.F5) { e.Handled = true; ReloadButton_Click(sender, e); }
-        else if (ctrl && e.Key == Key.F) { e.Handled = true; FindBar.Visibility = Visibility.Visible; FindBox.Focus(); FindBox.SelectAll(); }
-        else if (ctrl && e.Key == Key.D) { e.Handled = true; ToggleBookmark_Click(sender, e); }
-        else if (ctrl && e.Key == Key.H) { e.Handled = true; await OpenOrSwitchInternalTabAsync("aether://history"); }
-        else if (ctrl && e.Key == Key.J) { e.Handled = true; await OpenOrSwitchInternalTabAsync("aether://downloads"); }
-        else if (ctrl && e.Key == Key.OemComma) { e.Handled = true; await OpenOrSwitchInternalTabAsync("aether://settings"); }
-        else if (ctrl && e.Key == Key.Tab) { e.Handled = true; await CycleTabAsync(shift ? -1 : 1); }
-        else if (alt && e.Key == Key.Left) { e.Handled = true; BackButton_Click(sender, e); }
-        else if (alt && e.Key == Key.Right) { e.Handled = true; ForwardButton_Click(sender, e); }
-        else if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add)) { e.Handled = true; AdjustZoom(0.1); }
-        else if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract)) { e.Handled = true; AdjustZoom(-0.1); }
-        else if (ctrl && (e.Key == Key.D0 || e.Key == Key.NumPad0)) { e.Handled = true; SetZoom(1.0); }
-        else if (e.Key == Key.F11) { e.Handled = true; ToggleFullscreen(); }
-        else if (e.Key == Key.F12)
+        if (IsBrowserShortcut(key, ctrl, shift, alt))
         {
             e.Handled = true;
-            if (_activeTab?.Browser is { IsDisposed: false, IsBrowserInitialized: true } b)
-                b.ShowDevTools();
-        }
-        else if (e.Key == Key.Escape && FindBar.Visibility == Visibility.Visible) { e.Handled = true; CloseFindBar(); }
-        else if (ctrl && e.Key >= Key.D1 && e.Key <= Key.D9)
-        {
-            var idx = e.Key - Key.D1;
-            if (idx < _tabs.Count) { e.Handled = true; await SelectTabAsync(_tabs[idx]); }
+            await ExecuteBrowserShortcutAsync(key, ctrl, shift, alt);
         }
     }
 
@@ -2812,6 +2949,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void CloseFindBar()
     {
+        _isFindBarOpen = false;
         FindBar.Visibility = Visibility.Collapsed;
         _lastFindQuery = null;
         if (_activeTab?.Browser is { IsDisposed: false, IsBrowserInitialized: true } b)

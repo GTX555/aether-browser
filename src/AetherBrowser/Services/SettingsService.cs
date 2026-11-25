@@ -64,6 +64,13 @@ public sealed class SettingsService
                         loaded.SettingsSchemaVersion = 4;
                         migrated = true;
                     }
+                    // Migrate v4 default new-tab placement so new tabs always append at the right end
+                    if (loaded.SettingsSchemaVersion < 5)
+                    {
+                        loaded.OpenNewTabNextToCurrent = false;
+                        loaded.SettingsSchemaVersion = 5;
+                        migrated = true;
+                    }
                     if (migrated)
                         SaveInternal(loaded);
                     return loaded;

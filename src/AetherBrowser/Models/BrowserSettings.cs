@@ -6,7 +6,7 @@ namespace AetherBrowser.Models;
 public sealed class BrowserSettings
 {
     // --- Schema ---
-    public int SettingsSchemaVersion { get; set; } = 4;
+    public int SettingsSchemaVersion { get; set; } = 5;
 
     // --- General ---
     public string Language { get; set; } = "en";
@@ -110,7 +110,7 @@ public sealed class BrowserSettings
     // --- Tabs & New Tab ---
     public string NewTabMode { get; set; } = "Blank"; // Blank, CustomUrl
     public string CustomNewTabUrl { get; set; } = "about:blank";
-    public bool OpenNewTabNextToCurrent { get; set; } = true;
+    public bool OpenNewTabNextToCurrent { get; set; } = false;
     public bool SwitchToNewTab { get; set; } = true;
     public bool MiddleClickCloseTab { get; set; } = true;
     public bool DoubleClickCloseTab { get; set; } = false;

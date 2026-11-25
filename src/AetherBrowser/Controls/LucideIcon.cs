@@ -23,6 +23,10 @@ public sealed class LucideIcon : Viewbox
         DependencyProperty.Register(nameof(IconBrush), typeof(Brush), typeof(LucideIcon),
             new PropertyMetadata(null, OnBrushChanged));
 
+    public static readonly DependencyProperty FillBrushProperty =
+        DependencyProperty.Register(nameof(FillBrush), typeof(Brush), typeof(LucideIcon),
+            new PropertyMetadata(Brushes.Transparent, OnFillBrushChanged));
+
     private readonly Path _path;
 
     public string IconKey
@@ -47,6 +51,12 @@ public sealed class LucideIcon : Viewbox
     {
         get => (Brush?)GetValue(IconBrushProperty);
         set => SetValue(IconBrushProperty, value);
+    }
+
+    public Brush FillBrush
+    {
+        get => (Brush)GetValue(FillBrushProperty);
+        set => SetValue(FillBrushProperty, value);
     }
 
     public LucideIcon()
@@ -102,5 +112,11 @@ public sealed class LucideIcon : Viewbox
     {
         if (d is LucideIcon ico && e.NewValue is Brush b)
             ico._path.Stroke = b;
+    }
+
+    private static void OnFillBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is LucideIcon ico)
+            ico._path.Fill = e.NewValue as Brush ?? Brushes.Transparent;
     }
 }
