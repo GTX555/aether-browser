@@ -26,7 +26,7 @@ OutFile "${OUT_FILE}"
 BrandingText "${APP_NAME} ${APP_VERSION}"
 InstallDir "$LOCALAPPDATA\AetherBrowser"
 RequestExecutionLevel user
-SetCompressor /SOLID lzma
+SetCompressor zlib
 ManifestDPIAware true
 
 VIProductVersion "${APP_VERSION}.0"
