@@ -1,0 +1,55 @@
+name: Release Aether Browser
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 2.1.0)"
+        required: true
+        default: "2.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Determine version
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $v = "${{ github.event.inputs.version }}".TrimStart("v")
+          } else {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          echo "tag=v$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build Professional Installer & Portable Release
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -Version "${{ steps.ver.outputs.version }}" -CleanReleases
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Aether Browser ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/releases/AetherBrowser-Setup.exe
+            dist/releases/AetherBrowser-win-Portable.zip
+            dist/releases/releases.json

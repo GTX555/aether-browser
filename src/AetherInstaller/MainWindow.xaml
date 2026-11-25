@@ -1,0 +1,209 @@
+<Window x:Class="AetherInstaller.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Aether Browser Setup"
+        Width="620" Height="430"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI Variable, Segoe UI, sans-serif"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Icon="Assets/aether.ico">
+
+    <Border Background="{StaticResource Bg}"
+            BorderBrush="{StaticResource Border}"
+            BorderThickness="1"
+            CornerRadius="14"
+            Margin="10">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="22" ShadowDepth="4" Opacity="0.55" Color="#000000"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="44"/> <!-- Top Titlebar -->
+                <RowDefinition Height="*"/>  <!-- Step Content -->
+                <RowDefinition Height="64"/> <!-- Bottom Action Footer -->
+            </Grid.RowDefinitions>
+
+            <!-- Draggable Minimal Titlebar -->
+            <Border Grid.Row="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseDown" Padding="18,0,12,0">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Image Source="Assets/aether-256.png" Width="18" Height="18" RenderOptions.BitmapScalingMode="HighQuality" Margin="0,0,8,0"/>
+                        <TextBlock Text="Aether Browser Setup" Foreground="{StaticResource Muted}" FontSize="12" FontWeight="Medium"/>
+                        <Border Background="{StaticResource Surface2}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="99" Padding="7,1" Margin="8,0,0,0">
+                            <TextBlock x:Name="VersionBadgeText" Text="v2.1.0" Foreground="{StaticResource Muted}" FontSize="10.5" FontWeight="SemiBold"/>
+                        </Border>
+                    </StackPanel>
+
+                    <Button x:Name="CloseBtn"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Width="28" Height="28"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Foreground="{StaticResource Muted}"
+                            Cursor="Hand"
+                            Click="CloseBtn_Click"
+                            ToolTip="Close">
+                        <Path Data="M6,6 L14,14 M14,6 L6,14" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="20" Height="20"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- STEP 1: Welcome / Update -->
+            <Grid x:Name="StepWelcome" Grid.Row="1" Margin="30,10,30,10">
+                <StackPanel VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,18">
+                        <Border Width="58" Height="58" CornerRadius="14" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="6" Margin="0,0,16,0">
+                            <Image Source="Assets/aether-256.png" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="WelcomeHeadline" Text="Install Aether Browser" Foreground="{StaticResource Text}" FontSize="23" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="WelcomeSubline" Text="Ultra-lightweight, privacy-first, 100% open-source web browser." Foreground="{StaticResource Muted}" FontSize="13" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- 3 Minimal Feature Highlights -->
+                    <UniformGrid Columns="3" Margin="0,6,0,0">
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="100% Open-Source" Foreground="{StaticResource Text}" FontSize="12.5" FontWeight="SemiBold"/>
+                                <TextBlock Text="Open-source CEF engine. Zero Microsoft Edge or cloud telemetry." Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="4,0,4,0">
+                            <StackPanel>
+                                <TextBlock Text="Memory Saver" Foreground="{StaticResource Text}" FontSize="12.5" FontWeight="SemiBold"/>
+                                <TextBlock Text="Auto-sleep &amp; 0 MB tab hibernation keeps RAM minimal." Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="8,0,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Built-In AdBlocker" Foreground="{StaticResource Text}" FontSize="12.5" FontWeight="SemiBold"/>
+                                <TextBlock Text="Network + cosmetic ad blocking, DuckDuckGo &amp; MV3 extensions." Foreground="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <TextBlock x:Name="WelcomePathNote" Text="Installs cleanly for your user account — no administrator rights required." Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,16,0,0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- STEP 2: Customize Options -->
+            <Grid x:Name="StepCustomize" Grid.Row="1" Margin="30,6,30,10" Visibility="Collapsed">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Installation Options" Foreground="{StaticResource Text}" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,14"/>
+
+                    <TextBlock Text="Install Location" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,0,6"/>
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="InstallDirBox"
+                                 Grid.Column="0"
+                                 Background="{StaticResource Surface2}"
+                                 Foreground="{StaticResource Text}"
+                                 BorderBrush="{StaticResource Border}"
+                                 BorderThickness="1"
+                                 Padding="10,8"
+                                 FontSize="12.5"
+                                 VerticalContentAlignment="Center"/>
+                        <Button Grid.Column="1" Style="{StaticResource SecondaryBtn}" Content="Browse..." Margin="8,0,0,0" Click="BrowseDir_Click"/>
+                    </Grid>
+
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14,10">
+                        <StackPanel>
+                            <CheckBox x:Name="ChkDesktop" Content="Create Desktop shortcut" IsChecked="True"/>
+                            <CheckBox x:Name="ChkStartMenu" Content="Create Start Menu shortcut" IsChecked="True"/>
+                            <CheckBox x:Name="ChkRegisterBrowser" Content="Register Aether Browser in Windows Default Apps" IsChecked="True"/>
+                            <CheckBox x:Name="ChkLaunchAfter" Content="Launch Aether Browser after installation" IsChecked="True"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="DiskSpaceText" Text="Estimated disk space: ~365 MB" Foreground="{StaticResource Muted}" FontSize="11.5" Margin="2,10,0,0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- STEP 3: Installing / Updating Progress -->
+            <Grid x:Name="StepInstalling" Grid.Row="1" Margin="34,10,34,10" Visibility="Collapsed">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="InstallTitleText" Text="Installing Aether Browser..." Foreground="{StaticResource Text}" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="InstallStatusText" Text="Preparing installation..." Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,6,0,20" TextTrimming="CharacterEllipsis"/>
+
+                    <Border Height="8" Background="{StaticResource Surface2}" CornerRadius="99" ClipToBounds="True">
+                        <Border x:Name="ProgressFill" HorizontalAlignment="Left" Width="0" Height="8" CornerRadius="99" Background="{StaticResource Accent}"/>
+                    </Border>
+
+                    <Grid Margin="0,10,0,0">
+                        <TextBlock x:Name="InstallSubDetail" Text="Open-Source CEF Runtime" Foreground="{StaticResource Muted}" FontSize="11.5"/>
+                        <TextBlock x:Name="ProgressPercentText" Text="0%" HorizontalAlignment="Right" Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+
+            <!-- STEP 4: Completed -->
+            <Grid x:Name="StepComplete" Grid.Row="1" Margin="34,10,34,10" Visibility="Collapsed">
+                <StackPanel VerticalAlignment="Center">
+                    <Border Width="48" Height="48" CornerRadius="99" Background="#1A2E23" BorderBrush="#22C55E" BorderThickness="1" HorizontalAlignment="Left" Margin="0,0,0,14">
+                        <Path Data="M6,12 L10.5,16.5 L18,8" Stroke="#4ADE80" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock x:Name="CompleteTitle" Text="Aether Browser is ready" Foreground="{StaticResource Text}" FontSize="22" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="CompleteDetail" Text="Successfully installed to your system." Foreground="{StaticResource Muted}" FontSize="13" Margin="0,6,0,18" TextWrapping="Wrap"/>
+
+                    <Button Style="{StaticResource SecondaryBtn}" HorizontalAlignment="Left" Content="Open Windows Default Apps..." Click="OpenDefaultApps_Click"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- UNINSTALL MODE -->
+            <Grid x:Name="StepUninstall" Grid.Row="1" Margin="34,10,34,10" Visibility="Collapsed">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Uninstall Aether Browser" Foreground="{StaticResource Text}" FontSize="21" FontWeight="SemiBold"/>
+                    <TextBlock Text="This will remove the Aether Browser application, shortcuts, and Windows registrations." Foreground="{StaticResource Muted}" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,18"/>
+                    <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14,10">
+                        <CheckBox x:Name="ChkDeleteUserData" Content="Also delete my browsing history, bookmarks, settings, and cache" IsChecked="False"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+
+            <!-- Bottom Footer Bar -->
+            <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" CornerRadius="0,0,14,14" Padding="24,0">
+                <Grid>
+                    <!-- Step indicator dots -->
+                    <StackPanel x:Name="StepDots" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="Dot1" Width="7" Height="7" Fill="{StaticResource Accent}" Margin="0,0,6,0"/>
+                        <Ellipse x:Name="Dot2" Width="7" Height="7" Fill="{StaticResource Border}" Margin="0,0,6,0"/>
+                        <Ellipse x:Name="Dot3" Width="7" Height="7" Fill="{StaticResource Border}" Margin="0,0,6,0"/>
+                        <Ellipse x:Name="Dot4" Width="7" Height="7" Fill="{StaticResource Border}"/>
+                    </StackPanel>
+
+                    <!-- Action Buttons -->
+                    <StackPanel x:Name="FooterWelcome" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button Style="{StaticResource SecondaryBtn}" Content="Customize..." Margin="0,0,10,0" Click="GoCustomize_Click"/>
+                        <Button x:Name="QuickInstallBtn" Style="{StaticResource PrimaryBtn}" Content="Install Now" Click="StartInstall_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="FooterCustomize" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Button Style="{StaticResource SecondaryBtn}" Content="Back" Margin="0,0,10,0" Click="BackToWelcome_Click"/>
+                        <Button Style="{StaticResource PrimaryBtn}" Content="Install" Click="StartInstall_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="FooterComplete" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Button Style="{StaticResource SecondaryBtn}" Content="Close" Margin="0,0,10,0" Click="CloseBtn_Click"/>
+                        <Button Style="{StaticResource PrimaryBtn}" Content="Launch Aether Browser" Click="LaunchAndClose_Click"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="FooterUninstall" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Button Style="{StaticResource SecondaryBtn}" Content="Cancel" Margin="0,0,10,0" Click="CloseBtn_Click"/>
+                        <Button Style="{StaticResource DangerBtn}" Content="Uninstall" Click="ConfirmUninstall_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
