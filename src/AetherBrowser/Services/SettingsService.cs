@@ -57,6 +57,13 @@ public sealed class SettingsService
                         loaded.SettingsSchemaVersion = 3;
                         migrated = true;
                     }
+                    // Migrate v3 aggressive LowEndMemoryMode default (which evicted active tab GPU frames on switch)
+                    if (loaded.SettingsSchemaVersion < 4)
+                    {
+                        loaded.LowEndMemoryMode = false;
+                        loaded.SettingsSchemaVersion = 4;
+                        migrated = true;
+                    }
                     if (migrated)
                         SaveInternal(loaded);
                     return loaded;

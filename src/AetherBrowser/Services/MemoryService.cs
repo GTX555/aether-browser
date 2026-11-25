@@ -110,7 +110,7 @@ public sealed class MemoryService
             }
 
             tab.MemoryState = TabMemoryState.Sleeping;
-            TrimSubprocessWorkingSets();
+            _ = Task.Run(TrimSubprocessWorkingSets);
             return Task.FromResult(true);
         }
         catch

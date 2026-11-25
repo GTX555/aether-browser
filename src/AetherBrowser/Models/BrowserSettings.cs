@@ -6,7 +6,7 @@ namespace AetherBrowser.Models;
 public sealed class BrowserSettings
 {
     // --- Schema ---
-    public int SettingsSchemaVersion { get; set; } = 3;
+    public int SettingsSchemaVersion { get; set; } = 4;
 
     // --- General ---
     public string Language { get; set; } = "en";
@@ -60,7 +60,7 @@ public sealed class BrowserSettings
     public bool BlockImagesDataSaver { get; set; } = false;
     public bool DisableWebAnimations { get; set; } = false;
     public int DiskCacheSizeMb { get; set; } = 50;
-    public bool LowEndMemoryMode { get; set; } = true;
+    public bool LowEndMemoryMode { get; set; } = false;
     public bool ThrottleBackgroundTabs { get; set; } = true;
     public bool DisablePreconnect { get; set; } = true;
 

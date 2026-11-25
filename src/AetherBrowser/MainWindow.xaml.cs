@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -330,14 +331,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return tab;
     }
 
+    // Win32 HWND Z-order helper for zero-flash tab switching
+    private static readonly IntPtr HWND_TOP = IntPtr.Zero;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_SHOWWINDOW = 0x0040;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private static void BringBrowserHwndToTop(ChromiumWebBrowser browser)
+    {
+        try
+        {
+            if (browser.IsDisposed) return;
+            var hwnd = browser.Handle;
+            if (hwnd != IntPtr.Zero)
+                SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        catch { }
+    }
+
     private async Task SelectTabAsync(BrowserTab tab)
     {
-        if (_activeTab is not null)
+        // Fast no-op guard: clicking the already-active tab (or starting to drag it) must never flicker/re-hide it
+        if (tab == _activeTab &&
+            tab.MemoryState == TabMemoryState.Active &&
+            (tab.IsBlankTab || tab.Browser is { IsDisposed: false, Visibility: Visibility.Visible }))
         {
-            _activeTab.IsSelected = false;
-            _activeTab.LastActiveUtc = DateTime.UtcNow;
-            if (_activeTab.Browser is not null)
-                _activeTab.Browser.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var previousTab = _activeTab;
+        var oldBrowser = previousTab?.Browser;
+
+        if (previousTab is not null && previousTab != tab)
+        {
+            previousTab.IsSelected = false;
+            previousTab.LastActiveUtc = DateTime.UtcNow;
         }
 
         _activeTab = tab;
@@ -345,23 +377,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         tab.IsSelected = true;
         tab.LastActiveUtc = DateTime.UtcNow;
 
-        if (tab.MemoryState == TabMemoryState.Sleeping)
-        {
-            App.Memory.WakeSleepingTab(tab, App.SettingsService.Current);
-        }
-
-        if (tab.Browser is null || tab.Browser.IsDisposed || tab.MemoryState == TabMemoryState.Discarded)
-        {
-            await EnsureBrowserInitializedAsync(tab);
-            if (tab.Browser is { IsDisposed: false, IsBrowserInitialized: true })
-                NavigateTabCore(tab, tab.Url);
-        }
-        else
-        {
-            tab.Browser.Visibility = Visibility.Visible;
-        }
-
-        // Always dismiss autocomplete and force the address bar to sync to the newly selected tab
+        // Sync toolbar & address bar immediately so the UI feels instant on frame 0
         AutocompletePopup.IsOpen = false;
         _highlightedAutocompleteIndex = -1;
         if (!tab.IsBlankTab && AddressBox.IsKeyboardFocusWithin)
@@ -375,11 +391,82 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (tab.IsBlankTab)
         {
+            // Blank New Tabs use 0 MB RAM (no CEF HWND needed — WebViewHostGrid already renders exact theme BgBrush)
+            if (oldBrowser is not null && oldBrowser != tab.Browser && !oldBrowser.IsDisposed)
+            {
+                Panel.SetZIndex(oldBrowser, 0);
+                oldBrowser.Visibility = Visibility.Hidden;
+            }
+            if (tab.Browser is { IsDisposed: false } blankBrowser)
+            {
+                Panel.SetZIndex(blankBrowser, 10);
+                blankBrowser.Visibility = Visibility.Visible;
+                BringBrowserHwndToTop(blankBrowser);
+            }
+
             _ = Dispatcher.BeginInvoke(() =>
             {
-                AddressBox.Focus();
-                AddressBox.SelectAll();
+                if (_activeTab == tab)
+                {
+                    AddressBox.Focus();
+                    AddressBox.SelectAll();
+                }
             }, DispatcherPriority.Input);
+            return;
+        }
+
+        var wasSleeping = tab.MemoryState == TabMemoryState.Sleeping;
+        if (wasSleeping)
+        {
+            App.Memory.WakeSleepingTab(tab, App.SettingsService.Current);
+        }
+
+        if (tab.Browser is null || tab.Browser.IsDisposed || tab.MemoryState == TabMemoryState.Discarded)
+        {
+            // Keep oldBrowser visible underneath while initializing so there is zero blank flash
+            await EnsureBrowserInitializedAsync(tab);
+            if (_activeTab != tab)
+                return;
+
+            if (tab.Browser is { IsDisposed: false, IsBrowserInitialized: true } initBrowser)
+            {
+                Panel.SetZIndex(initBrowser, 10);
+                initBrowser.Visibility = Visibility.Visible;
+                BringBrowserHwndToTop(initBrowser);
+                NavigateTabCore(tab, tab.Url);
+            }
+        }
+        else
+        {
+            // Show NEW browser ON TOP first (inactive tabs use Hidden, never Collapsed — zero 0x0 resize or relayout!)
+            var newBrowser = tab.Browser;
+            Panel.SetZIndex(newBrowser, 10);
+            if (newBrowser.Visibility != Visibility.Visible)
+                newBrowser.Visibility = Visibility.Visible;
+            BringBrowserHwndToTop(newBrowser);
+        }
+
+        // Hide OLD browser strictly AFTER the new browser is composited on top (eliminates 1-frame empty flash!)
+        if (oldBrowser is not null && oldBrowser != tab.Browser && !oldBrowser.IsDisposed)
+        {
+            Panel.SetZIndex(oldBrowser, 0);
+            var prevRef = previousTab;
+            if (wasSleeping)
+            {
+                _ = Task.Delay(32).ContinueWith(_ => Dispatcher.BeginInvoke(() =>
+                {
+                    if (_activeTab != prevRef && !oldBrowser.IsDisposed)
+                        oldBrowser.Visibility = Visibility.Hidden;
+                }, DispatcherPriority.Render));
+            }
+            else
+            {
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    if (_activeTab != prevRef && !oldBrowser.IsDisposed)
+                        oldBrowser.Visibility = Visibility.Hidden;
+                }, DispatcherPriority.Render);
+            }
         }
     }
 
@@ -413,7 +500,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (tab.Browser is { IsDisposed: false } existing && tab.IsBrowserInitialized)
         {
-            existing.Visibility = tab.IsSelected ? Visibility.Visible : Visibility.Collapsed;
+            existing.Visibility = tab.IsSelected ? Visibility.Visible : Visibility.Hidden;
             return;
         }
 
@@ -423,7 +510,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var s = App.SettingsService.Current;
         var browser = new ChromiumWebBrowser
         {
-            Visibility = tab.IsSelected ? Visibility.Visible : Visibility.Collapsed,
+            Visibility = tab.IsSelected ? Visibility.Visible : Visibility.Hidden,
             BrowserSettings = CefHostService.CreateBrowserSettings(s)
         };
 
@@ -554,6 +641,43 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CefHostService.ApplyLiveSettings(browser, s);
         if (Math.Abs(tab.ZoomFactor - 1.0) > 0.001)
             browser.SetZoomLevel(CefHostService.ZoomFactorToCefLevel(tab.ZoomFactor));
+    }
+
+    private async Task NavigateTabAsync(BrowserTab tab, string rawInput)
+    {
+        var url = rawInput.Trim();
+        if (string.IsNullOrEmpty(url) || url.Equals("about:blank", StringComparison.OrdinalIgnoreCase))
+        {
+            if (tab.Browser is not null)
+                DisposeTabBrowser(tab);
+            tab.Url = "about:blank";
+            tab.Title = "New Tab";
+            tab.Favicon = null;
+            tab.IsSecure = false;
+            tab.IsLoading = false;
+            tab.LoadingProgress = 0;
+            tab.ResetBlocked();
+            if (tab == _activeTab)
+            {
+                SyncToolbarToActiveTab();
+                SyncAddressProgressToTab(tab);
+            }
+            return;
+        }
+
+        if (tab.Browser is null || tab.Browser.IsDisposed || !tab.IsBrowserInitialized)
+        {
+            tab.Url = url;
+            await EnsureBrowserInitializedAsync(tab);
+            if (tab.Browser is { IsDisposed: false, IsBrowserInitialized: true } b && tab == _activeTab)
+            {
+                Panel.SetZIndex(b, 10);
+                b.Visibility = Visibility.Visible;
+                BringBrowserHwndToTop(b);
+            }
+        }
+
+        NavigateTabCore(tab, url);
     }
 
     private void NavigateTabCore(BrowserTab tab, string rawInput)
@@ -1567,7 +1691,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return item;
     }
 
-    private void AddressBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    private async void AddressBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Down && AutocompletePopup.IsOpen && _autocompleteItems.Count > 0)
         {
@@ -1589,9 +1713,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
-            NavigateTabCore(_activeTab, target);
-            _activeTab.Browser?.Focus();
             e.Handled = true;
+            var active = _activeTab;
+            await NavigateTabAsync(active, target);
+            active.Browser?.Focus();
         }
         else if (e.Key == Key.Escape)
         {
@@ -1612,15 +1737,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _autocompleteItems[_highlightedAutocompleteIndex].IsHighlighted = true;
     }
 
-    private void AutocompleteItem_MouseDown(object sender, MouseButtonEventArgs e)
+    private async void AutocompleteItem_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is FrameworkElement { Tag: string url } && _activeTab is not null)
         {
             e.Handled = true;
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
-            NavigateTabCore(_activeTab, url);
-            _activeTab.Browser?.Focus();
+            var active = _activeTab;
+            await NavigateTabAsync(active, url);
+            active.Browser?.Focus();
         }
     }
 
@@ -1714,7 +1840,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         if (App.SettingsService.Current.AggressiveGcOnTabClose)
-            App.Memory.TrimWorkingSet(aggressiveGc: false);
+            _ = Task.Run(() => App.Memory.TrimWorkingSet(aggressiveGc: false));
     }
 
     private async Task OpenOrSwitchInternalTabAsync(string internalUrl, string? section = null)
@@ -2380,12 +2506,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_activeTab?.Browser is { IsDisposed: false, IsBrowserInitialized: true } b && b.CanGoForward)
             b.Forward();
     }
-    private void ReloadButton_Click(object sender, RoutedEventArgs e)
+    private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
         if (_activeTab is null) return;
         if (_activeTab.IsInternalPage || _activeTab.IsBlankTab)
         {
-            NavigateTabCore(_activeTab, _activeTab.Url);
+            await NavigateTabAsync(_activeTab, _activeTab.Url);
         }
         else if (_activeTab.IsLoading)
         {
@@ -2401,10 +2527,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ReloadBrowser(_activeTab);
         }
     }
-    private void HomeButton_Click(object sender, RoutedEventArgs e)
+    private async void HomeButton_Click(object sender, RoutedEventArgs e)
     {
         if (_activeTab is not null)
-            NavigateTabCore(_activeTab, App.SettingsService.Current.HomePageUrl);
+            await NavigateTabAsync(_activeTab, App.SettingsService.Current.HomePageUrl);
     }
 
     private void ToggleVerticalTabs_Click(object sender, RoutedEventArgs e) =>
@@ -2417,10 +2543,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UpdateBookmarkStar(_activeTab);
     }
 
-    private void BookmarkBarItem_Click(object sender, RoutedEventArgs e)
+    private async void BookmarkBarItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string url } && _activeTab is not null)
-            NavigateTabCore(_activeTab, url);
+            await NavigateTabAsync(_activeTab, url);
     }
 
     private static CustomPopupPlacement[] RightAlignPopupBelow(Size popupSize, Size targetSize, Point offset)

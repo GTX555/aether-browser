@@ -569,7 +569,7 @@ function sectionsHtml() {
       <div class="card">
         <div class="card-header"><div><div class="card-title">Lightweight Memory Saver</div><div class="card-sub">Open-Source CEF / Chromium tab suspension, tab hibernation (0 MB), and OS working-set trimming</div></div></div>
         ${selectRow('MemoryTargetLevel', 'Engine Memory Target Level', 'Instructs CEF / Chromium renderer processes to aggressively release unused heap memory', [['Low','Low (Recommended — Minimum RAM)'],['Normal','Normal (Higher cache retention)']])}
-        ${toggleRow('LowEndMemoryMode', 'Low-End Memory Mode', 'Enable Chromium low-end device memory profile to shrink tile & JS heap budgets (requires restart)')}
+        ${toggleRow('LowEndMemoryMode', 'Ultra-Low-RAM Device Mode (< 4 GB PCs)', 'Aggressively evicts hidden tab GPU frames to save every MB — may cause brief tab-switch re-renders (requires restart)')}
         ${toggleRow('ThrottleBackgroundTabs', 'Throttle Background Tabs', 'Intensively throttle background tab timers and frame rates to reduce CPU & RAM (requires restart)')}
         ${toggleRow('DisablePreconnect', 'Disable Speculative Preconnect', 'Stop background DNS prefetching and speculative network connections (saves RAM & privacy, requires restart)')}
         ${numberRow('DiskCacheSizeMb', 'Disk Cache Size Limit', 'Maximum HTTP disk cache size in MB (0 = minimal/in-memory cache, requires restart)', 0, 250, 5, ' MB')}
