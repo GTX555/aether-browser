@@ -78,25 +78,23 @@ public sealed class InternalPagesService
         return $"<!doctype html><html><head><meta charset=\"utf-8\"><title>New Tab</title><style>html,body{{margin:0;padding:0;width:100%;height:100%;background:{bg};overflow:hidden;}}</style></head><body></body></html>";
     }
 
-    public string BuildInternalPageHtml(
+    public object BuildInternalStateObject(
         string internalUrl,
         BrowserSettings settings,
         DataStoreService store,
         MemorySnapshot memory,
         UpdateInfo updateInfo,
         long lifetimeBlocked,
-        string engineVersion)
+        string engineVersion,
+        string? initialSection = null)
     {
         var route = internalUrl.Replace("aether://", "", StringComparison.OrdinalIgnoreCase).Trim('/').ToLowerInvariant();
         if (string.IsNullOrEmpty(route)) route = "settings";
 
-        var (bg, surface, surface2, border, text, muted) = GetThemePalette(settings);
-        var accent = string.IsNullOrWhiteSpace(settings.AccentColor) ? "#A1A1AA" : settings.AccentColor;
-        var accentFg = GetAccentForeground(accent);
-
-        var payload = JsonSerializer.Serialize(new
+        return new
         {
             route,
+            initialSection,
             settings,
             searchEngines = BrowserSettings.BuiltInSearchEngines,
             bookmarks = store.Bookmarks,
@@ -115,7 +113,28 @@ public sealed class InternalPagesService
                 isDefaultBrowser = DefaultBrowserService.IsDefaultBrowser(),
                 adBlockRules = App.AdBlocker.TotalRuleCount
             }
-        });
+        };
+    }
+
+    public string BuildInternalPageHtml(
+        string internalUrl,
+        BrowserSettings settings,
+        DataStoreService store,
+        MemorySnapshot memory,
+        UpdateInfo updateInfo,
+        long lifetimeBlocked,
+        string engineVersion,
+        string? initialSection = null)
+    {
+        var route = internalUrl.Replace("aether://", "", StringComparison.OrdinalIgnoreCase).Trim('/').ToLowerInvariant();
+        if (string.IsNullOrEmpty(route)) route = "settings";
+
+        var (bg, surface, surface2, border, text, muted) = GetThemePalette(settings);
+        var accent = string.IsNullOrWhiteSpace(settings.AccentColor) ? "#A1A1AA" : settings.AccentColor;
+        var accentFg = GetAccentForeground(accent);
+
+        var payload = JsonSerializer.Serialize(BuildInternalStateObject(
+            internalUrl, settings, store, memory, updateInfo, lifetimeBlocked, engineVersion, initialSection));
 
         var icons = JsonSerializer.Serialize(new Dictionary<string, string>
         {
@@ -381,7 +400,7 @@ const STATE = {{payload}};
 const ICONS = {{icons}};
 
 const ACCENTS = ['#A1A1AA','#71717A','#D4D4D8','#52525B','#10B981','#06B6D4','#3B82F6','#F59E0B'];
-let activeTab = ({
+let activeTab = STATE.initialSection || ({
   settings: 'general',
   history: 'history',
   bookmarks: 'bookmarks',
@@ -391,7 +410,7 @@ let activeTab = ({
 let searchQuery = '';
 
 function post(action, data = {}) {
-  const payload = JSON.stringify({ action, ...data });
+  const payload = JSON.stringify({ action, section: activeTab, ...data });
   if (window.aetherBridge) window.aetherBridge.postMessage(payload);
   else window.chrome?.webview?.postMessage(payload);
 }
@@ -807,7 +826,7 @@ function sectionsHtml() {
         ${STATE.history.length === 0 ? `<div class="empty">No history entries yet.</div>` : STATE.history.map(h => `
           <div class="list-item" data-search="${esc(h.Title + ' ' + h.Url)}">
             <div class="list-meta" style="cursor:pointer" onclick="post('openUrl',{url:'${esc(h.Url)}'})">
-              <div class="list-title">${esc(h.Title || h.Url)}</div>
+              <div class="list-title">${esc(h.Title || h.Url)}${(h.VisitCount || 1) > 1 ? ` <span class="pill">${h.VisitCount}×</span>` : ''}</div>
               <div class="list-url">${esc(h.Url)} · ${new Date(h.VisitedUtc).toLocaleString()}</div>
             </div>
             <button class="btn btn-danger" onclick="post('removeHistory',{id:'${esc(h.Id)}'})">${ICONS.trash}</button>
@@ -858,9 +877,46 @@ const TITLES = {
   shortcuts: 'Keyboard Shortcuts', history: 'History', bookmarks: 'Bookmarks', downloads: 'Downloads'
 };
 
+function cleanHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch { return ''; }
+}
+
+function scoreHistoryEntry(h, q, hostVisits, nowMs) {
+  const url = String(h.Url || '');
+  const title = String(h.Title || '');
+  const host = cleanHost(url);
+  const urlLower = url.toLowerCase();
+  const titleLower = title.toLowerCase();
+  const hostMatch = host && host.includes(q);
+  const urlMatch = urlLower.includes(q);
+  const titleMatch = titleLower.includes(q);
+  if (!hostMatch && !urlMatch && !titleMatch) return 0;
+
+  let score = 10;
+  if (host.startsWith(q)) score += 95;
+  else if (hostMatch) score += 40;
+  if (titleLower.startsWith(q)) score += 45;
+  else if (titleMatch) score += 20;
+
+  const visits = Math.max(1, h.VisitCount || 1);
+  const siteVisits = (host && hostVisits[host]) ? hostVisits[host] : visits;
+  score += Math.log2(visits + 1) * 55 + Math.log2(siteVisits + 1) * 24;
+
+  const ageHours = Math.max(0, (nowMs - new Date(h.VisitedUtc).getTime()) / 3600000);
+  if (ageHours <= 6) score += 32;
+  else if (ageHours <= 24) score += 24;
+  else if (ageHours <= 168) score += 14;
+  else if (ageHours <= 720) score += 6;
+  else score += 1;
+
+  return score;
+}
+
 function render() {
   document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.tab === activeTab && !searchQuery);
+    btn.classList.toggle('active', btn.dataset.tab === activeTab && (!searchQuery || ['history','bookmarks','downloads'].includes(activeTab)));
   });
 
   const sections = sectionsHtml();
@@ -869,6 +925,52 @@ function render() {
 
   if (searchQuery.trim()) {
     const q = searchQuery.trim().toLowerCase();
+    if (activeTab === 'history') {
+      titleEl.textContent = `History matching "${searchQuery.trim()}"`;
+      const hostVisits = {};
+      for (const h of STATE.history) {
+        const host = cleanHost(h.Url);
+        if (host) hostVisits[host] = (hostVisits[host] || 0) + Math.max(1, h.VisitCount || 1);
+      }
+      const nowMs = Date.now();
+      const ranked = STATE.history
+        .map(h => ({ h, score: scoreHistoryEntry(h, q, hostVisits, nowMs) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map(x => x.h);
+      root.innerHTML = `<div class="card">
+        <div class="card-header"><div><div class="card-title">Most Visited Matches (${ranked.length})</div><div class="card-sub">Ranked by visit frequency, site usage, and recency</div></div></div>
+        ${ranked.length === 0 ? `<div class="empty">No history entries matching "${esc(searchQuery)}".</div>` : ranked.map(h => `
+          <div class="list-item">
+            <div class="list-meta" style="cursor:pointer" onclick="post('openUrl',{url:'${esc(h.Url)}'})">
+              <div class="list-title">${esc(h.Title || h.Url)}${(h.VisitCount || 1) > 1 ? ` <span class="pill">${h.VisitCount}×</span>` : ''}</div>
+              <div class="list-url">${esc(h.Url)} · ${new Date(h.VisitedUtc).toLocaleString()}</div>
+            </div>
+            <button class="btn btn-danger" onclick="post('removeHistory',{id:'${esc(h.Id)}'})">${ICONS.trash}</button>
+          </div>
+        `).join('')}
+      </div>`;
+      return;
+    }
+
+    if (activeTab === 'bookmarks' || activeTab === 'downloads') {
+      titleEl.textContent = `${TITLES[activeTab]} matching "${searchQuery.trim()}"`;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = sections[activeTab];
+      const matches = Array.from(tmp.querySelectorAll('[data-search]'))
+        .filter(el => el.dataset.search.toLowerCase().includes(q));
+      if (matches.length === 0) {
+        root.innerHTML = `<div class="card"><div class="empty">No ${activeTab} matching "${esc(searchQuery)}".</div></div>`;
+      } else {
+        const card = document.createElement('div');
+        card.className = 'card';
+        matches.forEach(m => card.appendChild(m));
+        root.innerHTML = '';
+        root.appendChild(card);
+      }
+      return;
+    }
+
     titleEl.textContent = `Search results for "${searchQuery.trim()}"`;
     const allHtml = ['general','appearance','memory','privacy','search','tabs','permissions','extensions','updates']
       .map(k => sections[k]).join('');
@@ -900,6 +1002,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     searchQuery = '';
     document.getElementById('searchBox').value = '';
     activeTab = btn.dataset.tab;
+    post('setInternalSection', { section: activeTab });
     render();
   });
 });
@@ -916,8 +1019,14 @@ window.aetherOnMessage = function(msg) {
     if (wrap && fill) { wrap.style.display = 'block'; fill.style.width = msg.percent + '%'; }
   }
   if (msg.type === 'refreshState') {
+    const scroller = document.querySelector('.content');
+    const prevScroll = scroller ? scroller.scrollTop : 0;
+    const keepSection = activeTab;
     Object.assign(STATE, msg.state);
+    activeTab = keepSection;
     render();
+    if (scroller) scroller.scrollTop = prevScroll;
+    if (msg.toast) showToast(msg.toast);
   }
 };
 

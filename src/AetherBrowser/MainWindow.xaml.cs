@@ -592,7 +592,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var mem = App.Memory.CaptureSnapshot(_tabs);
             var engineVer = App.CefHost.EngineVersion;
             var html = App.InternalPages.BuildInternalPageHtml(
-                tab.Url, s, App.DataStore, mem, App.Updates.LastInfo, App.Privacy.TotalBlockedLifetime, engineVer);
+                tab.Url, s, App.DataStore, mem, App.Updates.LastInfo, App.Privacy.TotalBlockedLifetime, engineVer, tab.InternalSection);
             tab.Browser.LoadHtml(html, base64Encode: true);
             if (tab == _activeTab)
             {
@@ -785,9 +785,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             using var doc = JsonDocument.Parse(rawJson);
             var root = doc.RootElement;
             var action = root.TryGetProperty("action", out var a) ? a.GetString() : "";
+            if (root.TryGetProperty("section", out var secEl))
+            {
+                var sec = secEl.GetString();
+                if (!string.IsNullOrWhiteSpace(sec))
+                    tab.InternalSection = sec;
+            }
 
             switch (action)
             {
+                case "setInternalSection":
+                    break;
                 case "updateSetting":
                 {
                     var key = root.GetProperty("key").GetString() ?? "";
@@ -811,13 +819,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 case "updateAdBlockLists":
                 {
                     var (_, msg) = await App.AdBlocker.UpdateCommunityFilterListsAsync();
-                    ReloadInternalPageWithToast(tab, msg);
+                    RefreshInternalPageState(tab, msg);
                     break;
                 }
                 case "sleepAllTabs":
                 {
                     await SleepAllInactiveTabsAsync();
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "purgeMemory":
@@ -825,7 +833,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     await SleepAllInactiveTabsAsync();
                     App.Memory.TrimWorkingSet(aggressiveGc: true);
                     await RefreshMemoryBadgeAsync();
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "clearBrowsingData":
@@ -844,7 +852,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     if (dlg.ShowDialog(this) == true)
                     {
                         var (ok, msg, _) = await App.Extensions.InstallFromUnpackedFolderAsync(dlg.FolderName);
-                        ReloadInternalPageWithToast(tab, msg);
+                        RefreshInternalPageState(tab, msg);
                     }
                     break;
                 }
@@ -858,7 +866,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     if (dlg.ShowDialog(this) == true)
                     {
                         var (ok, msg, _) = await App.Extensions.InstallFromPackageFileAsync(dlg.FileName);
-                        ReloadInternalPageWithToast(tab, msg);
+                        RefreshInternalPageState(tab, msg);
                     }
                     break;
                 }
@@ -866,7 +874,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     var input = root.GetProperty("input").GetString() ?? "";
                     var (ok, msg, _) = await App.Extensions.InstallFromChromeWebStoreAsync(input);
-                    ReloadInternalPageWithToast(tab, msg);
+                    RefreshInternalPageState(tab, msg);
                     break;
                 }
                 case "toggleExtension":
@@ -881,7 +889,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     var id = root.GetProperty("id").GetString() ?? "";
                     await App.Extensions.RemoveAsync(id);
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab, "Extension removed");
                     break;
                 }
                 case "openExtensionPage":
@@ -899,7 +907,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 case "checkUpdates":
                 {
                     var info = await App.Updates.CheckForUpdatesAsync(manual: true);
-                    ReloadInternalPageWithToast(tab, info.StatusMessage);
+                    RefreshInternalPageState(tab, info.StatusMessage);
                     break;
                 }
                 case "applyUpdate":
@@ -931,7 +939,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 case "resetSettings":
                 {
                     App.SettingsService.ResetToDefaults();
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    ReloadInternalPageWithToast(tab, "Settings reset to defaults");
                     break;
                 }
                 case "openUrl":
@@ -944,25 +952,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 case "clearHistory":
                 {
                     App.DataStore.ClearHistory();
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "removeHistory":
                 {
                     App.DataStore.RemoveHistoryEntry(root.GetProperty("id").GetString() ?? "");
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "removeBookmark":
                 {
                     App.DataStore.RemoveBookmark(root.GetProperty("id").GetString() ?? "");
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "clearDownloads":
                 {
                     App.DataStore.ClearDownloads();
-                    if (tab.IsInternalPage) NavigateTabCore(tab, tab.Url);
+                    RefreshInternalPageState(tab);
                     break;
                 }
                 case "openDownloadFolder":
@@ -1001,6 +1009,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CefHostService.ApplyRuntimePreferences(
             _isPrivate ? _privateRequestContext : App.CefHost.GetGlobalRequestContext(),
             current);
+    }
+
+    private void RefreshInternalPageState(BrowserTab tab, string? toast = null)
+    {
+        if (!tab.IsInternalPage) return;
+        var mem = App.Memory.CaptureSnapshot(_tabs);
+        var state = App.InternalPages.BuildInternalStateObject(
+            tab.Url,
+            App.SettingsService.Current,
+            App.DataStore,
+            mem,
+            App.Updates.LastInfo,
+            App.Privacy.TotalBlockedLifetime,
+            App.CefHost.EngineVersion,
+            tab.InternalSection);
+        SendToInternalPage(tab, new { type = "refreshState", state, toast });
     }
 
     private void ReloadInternalPageWithToast(BrowserTab tab, string text)
@@ -1392,25 +1416,52 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var s = App.SettingsService.Current;
         var built = new List<AutocompleteItem>();
+        var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (s.AutocompleteFromBookmarks)
         {
-            foreach (var b in App.DataStore.Bookmarks.Where(b =>
-                b.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                b.Url.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(3))
+            var topBookmarks = App.DataStore.Bookmarks
+                .Select(b => (Item: b, Score: ScoreUrlMatch(b.Url, b.Title, query)))
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .Take(3);
+
+            foreach (var (b, _) in topBookmarks)
             {
-                built.Add(CreateAutocompleteItem("Icon.Star", b.Title, b.Url, b.Url, "Bookmark", fetchFavicon: true));
+                var norm = NormalizeDedupUrl(b.Url);
+                if (seenUrls.Add(norm))
+                    built.Add(CreateAutocompleteItem("Icon.Star", b.Title, b.Url, b.Url, "Bookmark", fetchFavicon: true));
             }
         }
 
         if (s.AutocompleteFromHistory)
         {
-            foreach (var h in App.DataStore.History.Where(h =>
-                (h.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                 h.Url.Contains(query, StringComparison.OrdinalIgnoreCase)) &&
-                !built.Any(x => x.Url.Equals(h.Url, StringComparison.OrdinalIgnoreCase))).Take(5))
+            var now = DateTime.UtcNow;
+
+            // Aggregate total visits per host so frequently visited sites always rank higher than 1-visit links
+            var hostVisits = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in App.DataStore.History)
             {
-                built.Add(CreateAutocompleteItem("Icon.History", h.Title, h.Url, h.Url, "History", fetchFavicon: true));
+                var host = ExtractCleanHost(entry.Url);
+                if (!string.IsNullOrEmpty(host))
+                    hostVisits[host] = hostVisits.TryGetValue(host, out var v) ? v + Math.Max(1, entry.VisitCount) : Math.Max(1, entry.VisitCount);
+            }
+
+            var topHistory = App.DataStore.History
+                .Select(h => (Item: h, Score: ScoreHistoryFrecency(h, query, hostVisits, now)))
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .Take(12);
+
+            int added = 0;
+            foreach (var (h, _) in topHistory)
+            {
+                if (added >= 6) break;
+                var norm = NormalizeDedupUrl(h.Url);
+                if (!seenUrls.Add(norm)) continue;
+                var badge = h.VisitCount >= 3 ? $"History · {h.VisitCount}×" : "History";
+                built.Add(CreateAutocompleteItem("Icon.History", h.Title, h.Url, h.Url, badge, fetchFavicon: true));
+                added++;
             }
         }
 
@@ -1423,6 +1474,78 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         _highlightedAutocompleteIndex = -1;
         AutocompletePopup.IsOpen = _autocompleteItems.Count > 0;
+    }
+
+    private static string NormalizeDedupUrl(string url) => url.Trim().TrimEnd('/');
+
+    private static string ExtractCleanHost(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "";
+        var host = uri.Host;
+        return host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? host[4..] : host;
+    }
+
+    private static double ScoreUrlMatch(string url, string title, string query)
+    {
+        var q = query.Trim();
+        if (string.IsNullOrEmpty(q)) return 0;
+
+        var host = ExtractCleanHost(url);
+        var hostMatch = !string.IsNullOrEmpty(host) && host.Contains(q, StringComparison.OrdinalIgnoreCase);
+        var urlMatch = url.Contains(q, StringComparison.OrdinalIgnoreCase);
+        var titleMatch = !string.IsNullOrEmpty(title) && title.Contains(q, StringComparison.OrdinalIgnoreCase);
+
+        if (!hostMatch && !urlMatch && !titleMatch)
+            return 0;
+
+        double score = 10;
+        if (host.StartsWith(q, StringComparison.OrdinalIgnoreCase)) score += 95;
+        else if (hostMatch) score += 40;
+
+        if (!string.IsNullOrEmpty(title) && title.StartsWith(q, StringComparison.OrdinalIgnoreCase)) score += 45;
+        else if (titleMatch) score += 20;
+
+        // Prefer cleaner root / shallow URLs over deep random links when matching a domain
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            if (uri.AbsolutePath is "/" or "" && string.IsNullOrEmpty(uri.Query))
+                score += 35;
+            else if (uri.AbsolutePath.Count(c => c == '/') <= 1 && string.IsNullOrEmpty(uri.Query))
+                score += 12;
+        }
+
+        return score;
+    }
+
+    private static double ScoreHistoryFrecency(
+        HistoryEntry h,
+        string query,
+        Dictionary<string, int> hostVisits,
+        DateTime nowUtc)
+    {
+        var matchScore = ScoreUrlMatch(h.Url, h.Title, query);
+        if (matchScore <= 0) return 0;
+
+        // 1. Page visit frequency (primary signal: how often you visit THIS page)
+        var pageFreqScore = Math.Log2(Math.Max(1, h.VisitCount) + 1) * 55.0;
+
+        // 2. Site-wide visit frequency (how often you visit this domain overall)
+        var host = ExtractCleanHost(h.Url);
+        var siteVisits = !string.IsNullOrEmpty(host) && hostVisits.TryGetValue(host, out var tv) ? tv : 1;
+        var siteFreqScore = Math.Log2(siteVisits + 1) * 24.0;
+
+        // 3. Recency decay bonus
+        var ageHours = Math.Max(0, (nowUtc - h.VisitedUtc).TotalHours);
+        double recencyScore = ageHours switch
+        {
+            <= 6 => 32,
+            <= 24 => 24,
+            <= 24 * 7 => 14,
+            <= 24 * 30 => 6,
+            _ => 1
+        };
+
+        return matchScore + pageFreqScore + siteFreqScore + recencyScore;
     }
 
     private AutocompleteItem CreateAutocompleteItem(string iconKey, string title, string subtitle, string url, string badge, bool fetchFavicon)
@@ -1594,17 +1717,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             App.Memory.TrimWorkingSet(aggressiveGc: false);
     }
 
-    private async Task OpenOrSwitchInternalTabAsync(string internalUrl)
+    private async Task OpenOrSwitchInternalTabAsync(string internalUrl, string? section = null)
     {
         var existing = _tabs.FirstOrDefault(t => t.Url.Equals(internalUrl, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
+            if (!string.IsNullOrWhiteSpace(section))
+                existing.InternalSection = section;
             await SelectTabAsync(existing);
-            NavigateTabCore(existing, internalUrl);
+            if (!string.IsNullOrWhiteSpace(section))
+                NavigateTabCore(existing, internalUrl);
+            else
+                RefreshInternalPageState(existing);
         }
         else
         {
-            await CreateTabAsync(internalUrl, select: true);
+            var created = await CreateTabAsync(internalUrl, select: false);
+            if (!string.IsNullOrWhiteSpace(section))
+                created.InternalSection = section;
+            await SelectTabAsync(created);
         }
     }
 
@@ -2418,11 +2549,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void OpenPrivacySettings_Click(object sender, RoutedEventArgs e)
     {
         PrivacyPopup.IsOpen = false;
-        await OpenOrSwitchInternalTabAsync("aether://settings");
+        await OpenOrSwitchInternalTabAsync("aether://settings", "privacy");
     }
 
     private async void MemoryBadge_Click(object sender, RoutedEventArgs e) =>
-        await OpenOrSwitchInternalTabAsync("aether://settings");
+        await OpenOrSwitchInternalTabAsync("aether://settings", "memory");
 
     private void DownloadsButton_Click(object sender, RoutedEventArgs e)
     {
@@ -2507,7 +2638,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         MainMenuPopup.IsOpen = false;
         var info = await App.Updates.CheckForUpdatesAsync(manual: true);
         if (!info.IsUpdateAvailable)
-            await OpenOrSwitchInternalTabAsync("aether://settings");
+            await OpenOrSwitchInternalTabAsync("aether://settings", "updates");
     }
     private void Menu_DevTools_Click(object sender, RoutedEventArgs e)
     {

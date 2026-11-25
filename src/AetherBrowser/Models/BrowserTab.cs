@@ -37,6 +37,7 @@ public sealed class BrowserTab : INotifyPropertyChanged
     public bool IsBlankTab => string.Equals(Url, "about:blank", StringComparison.OrdinalIgnoreCase);
     public DateTime LastActiveUtc { get; set; } = DateTime.UtcNow;
     public List<string> BlockedDomains { get; } = new();
+    public string? InternalSection { get; set; }
 
     public string Title
     {
