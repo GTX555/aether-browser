@@ -25,6 +25,7 @@ namespace AetherBrowser;
 public partial class MainWindow : Window, INotifyPropertyChanged
 {
     private readonly bool _isPrivate;
+    public bool IsPrivateWindow => _isPrivate;
     private readonly string? _initialUrl;
     private readonly bool _hasExplicitBounds;
     private readonly ObservableCollection<BrowserTab> _tabs = new();

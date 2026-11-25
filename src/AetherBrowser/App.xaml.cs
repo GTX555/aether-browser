@@ -42,13 +42,50 @@ public partial class App : Application
         ApplyTheme(SettingsService.Current);
         SettingsService.SettingsChanged += ApplyTheme;
 
-        var initialUrl = e.Args.FirstOrDefault(a =>
-            a.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            a.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+        var initialUrl = SingleInstanceService.ExtractLaunchUrl(e.Args);
 
         var win = new MainWindow(isPrivate: false, initialUrl: initialUrl);
         MainWindow = win;
         win.Show();
+
+        // Listen for external links / secondary launches forwarded via SingleInstanceService IPC
+        Program.SingleInstance?.StartListening(args =>
+        {
+            Dispatcher.BeginInvoke(async () => await HandleSecondaryLaunchAsync(args));
+        });
+    }
+
+    public static async Task HandleSecondaryLaunchAsync(string[] args)
+    {
+        var url = SingleInstanceService.ExtractLaunchUrl(args);
+        var isPrivateArg = args.Any(a =>
+            a.Equals("--private", StringComparison.OrdinalIgnoreCase) ||
+            a.Equals("--incognito", StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrEmpty(url) && !isPrivateArg)
+        {
+            var targetWin = Current?.Windows.OfType<MainWindow>()
+                .FirstOrDefault(w => w.IsLoaded && !w.IsPrivateWindow);
+
+            if (targetWin is not null)
+            {
+                if (targetWin.WindowState == WindowState.Minimized)
+                    targetWin.WindowState = WindowState.Normal;
+
+                targetWin.Activate();
+                targetWin.Topmost = true;
+                targetWin.Topmost = false;
+                targetWin.Focus();
+
+                await targetWin.CreateTabAsync(url, select: true);
+                return;
+            }
+        }
+
+        // No existing normal window (or user explicitly opened a new window from shortcut)
+        var newWin = new MainWindow(isPrivate: isPrivateArg, initialUrl: url);
+        newWin.Show();
+        newWin.Activate();
     }
 
     protected override void OnExit(ExitEventArgs e)

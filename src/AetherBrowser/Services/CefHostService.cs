@@ -1,6 +1,8 @@
 using System.IO;
+using System.Windows;
 using System.Windows.Media;
 using CefSharp;
+using CefSharp.Handler;
 using CefSharp.Wpf.HwndHost;
 using AetherSettings = AetherBrowser.Models.BrowserSettings;
 using CefBrowserSettings = CefSharp.BrowserSettings;
@@ -191,7 +193,7 @@ public sealed class CefHostService
             if (settings.Theme.Equals("Light", StringComparison.OrdinalIgnoreCase))
                 args["force-dark-mode"] = "0";
 
-            _initialized = Cef.Initialize(cefSettings, performDependencyCheck: true, browserProcessHandler: null);
+            _initialized = Cef.Initialize(cefSettings, performDependencyCheck: true, browserProcessHandler: new AetherBrowserProcessHandler());
 
             if (_initialized)
                 ApplyRuntimePreferences(Cef.GetGlobalRequestContext(), settings);
@@ -381,4 +383,33 @@ public sealed class CefHostService
         "Custom" when !string.IsNullOrWhiteSpace(settings.CustomDohUrl) => settings.CustomDohUrl.Trim(),
         _ => ""
     };
+}
+
+/// <summary>
+/// Defense-in-depth handler: prevents Chromium's internal ProcessSingleton from ever spawning a
+/// raw standalone Chromium window if a second launch somehow bypasses SingleInstanceService.
+/// </summary>
+internal sealed class AetherBrowserProcessHandler : BrowserProcessHandler
+{
+    protected override bool OnAlreadyRunningAppRelaunch(IReadOnlyDictionary<string, string> commandLine, string currentDirectory)
+    {
+        try
+        {
+            var argsList = new List<string>();
+            if (commandLine is not null)
+            {
+                foreach (var kv in commandLine)
+                {
+                    if (!string.IsNullOrWhiteSpace(kv.Value)) argsList.Add(kv.Value);
+                    if (!string.IsNullOrWhiteSpace(kv.Key)) argsList.Add(kv.Key);
+                }
+            }
+
+            Application.Current?.Dispatcher.BeginInvoke(async () =>
+                await App.HandleSecondaryLaunchAsync(argsList.ToArray()));
+        }
+        catch { }
+
+        return true; // Handled by Aether — never spawn a raw Chromium window!
+    }
 }
