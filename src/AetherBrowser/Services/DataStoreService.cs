@@ -37,6 +37,7 @@ public sealed class DataStoreService : IDisposable
     public List<BookmarkItem> Bookmarks { get; private set; }
     public List<HistoryEntry> History { get; private set; }
     public List<DownloadRecord> Downloads { get; private set; }
+    public List<DownloadRecord> SessionDownloads { get; } = new();
     public List<ExtensionRecord> Extensions { get; private set; }
 
     public event Action? BookmarksChanged;
@@ -176,8 +177,21 @@ public sealed class DataStoreService : IDisposable
             if (Downloads.Count > 500)
                 Downloads.RemoveRange(500, Downloads.Count - 500);
 
+            var sIdx = SessionDownloads.FindIndex(d => d.Id == record.Id);
+            if (sIdx >= 0) SessionDownloads[sIdx] = record;
+            else SessionDownloads.Insert(0, record);
+
             _dirtyDownloads = true;
             ScheduleDebouncedFlushLocked();
+        }
+        DownloadsChanged?.Invoke();
+    }
+
+    public void ClearSessionDownloads()
+    {
+        lock (_dataLock)
+        {
+            SessionDownloads.Clear();
         }
         DownloadsChanged?.Invoke();
     }
@@ -187,6 +201,7 @@ public sealed class DataStoreService : IDisposable
         lock (_dataLock)
         {
             Downloads.Clear();
+            SessionDownloads.Clear();
             _dirtyDownloads = true;
             ScheduleDebouncedFlushLocked();
         }

@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using CefSharp;
 using CefSharp.Handler;
@@ -16,9 +18,43 @@ namespace AetherBrowser.Services;
 /// </summary>
 public sealed class CefHostService
 {
+    private const int WH_KEYBOARD = 2;
+    private const int HC_ACTION = 0;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_MENU = 0x12;
+
+    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
     private readonly object _initLock = new();
     private bool _initialized;
     private bool _shutdown;
+    private IntPtr _cefKeyboardHook;
+    private HookProc? _cefKeyboardHookProc;
+
+    /// <summary>
+    /// Thread-local Win32 hook callback invoked on CEF's UI thread before Chromium processes a keystroke.
+    /// Args: (foregroundHwnd, key, ctrl, shift, alt, isRepeat) -> return true to eat the keystroke.
+    /// </summary>
+    public Func<IntPtr, Key, bool, bool, bool, bool, bool>? ShortcutInterceptor { get; set; }
 
     public string UserDataFolder { get; }
     public string CachePath { get; }
@@ -196,10 +232,53 @@ public sealed class CefHostService
             _initialized = Cef.Initialize(cefSettings, performDependencyCheck: true, browserProcessHandler: new AetherBrowserProcessHandler());
 
             if (_initialized)
+            {
                 ApplyRuntimePreferences(Cef.GetGlobalRequestContext(), settings);
+                Cef.PostAction(CefThreadIds.TID_UI, InstallCefKeyboardHook);
+            }
 
             return _initialized;
         }
+    }
+
+    private void InstallCefKeyboardHook()
+    {
+        try
+        {
+            if (_cefKeyboardHook != IntPtr.Zero) return;
+            _cefKeyboardHookProc = CefKeyboardHookCallback;
+            _cefKeyboardHook = SetWindowsHookEx(WH_KEYBOARD, _cefKeyboardHookProc, IntPtr.Zero, GetCurrentThreadId());
+        }
+        catch { }
+    }
+
+    private IntPtr CefKeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode == HC_ACTION)
+        {
+            var flags = lParam.ToInt64();
+            bool isKeyUp = (flags & (1L << 31)) != 0;
+            if (!isKeyUp)
+            {
+                bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+
+                // Never swallow AltGr (Ctrl+Alt on European keyboards)
+                if (!(ctrl && alt))
+                {
+                    var key = KeyInterop.KeyFromVirtualKey(wParam.ToInt32());
+                    if (key != Key.None)
+                    {
+                        bool isRepeat = (flags & (1L << 30)) != 0;
+                        var interceptor = ShortcutInterceptor;
+                        if (interceptor is not null && interceptor(GetForegroundWindow(), key, ctrl, shift, alt, isRepeat))
+                            return (IntPtr)1;
+                    }
+                }
+            }
+        }
+        return CallNextHookEx(_cefKeyboardHook, nCode, wParam, lParam);
     }
 
     /// <summary>
@@ -354,6 +433,16 @@ public sealed class CefHostService
         {
             if (_shutdown) return;
             _shutdown = true;
+
+            try
+            {
+                if (_cefKeyboardHook != IntPtr.Zero)
+                {
+                    UnhookWindowsHookEx(_cefKeyboardHook);
+                    _cefKeyboardHook = IntPtr.Zero;
+                }
+            }
+            catch { }
 
             try
             {

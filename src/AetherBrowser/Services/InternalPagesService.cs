@@ -236,16 +236,16 @@ public sealed class InternalPagesService
     position: relative; width: 320px; max-width: 100%;
   }
   .search-wrap svg {
-    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
-    color: var(--muted); pointer-events: none;
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); pointer-events: none; z-index: 1;
   }
-  .search-input {
-    width: 100%; padding: 8px 12px 8px 34px; border-radius: 99px;
+  .search-wrap input.search-input {
+    width: 100%; padding: 8px 12px 8px 36px; border-radius: 8px;
     border: 1px solid var(--border); background: var(--surface);
     color: var(--text); font: inherit; outline: none;
     transition: border-color .15s;
   }
-  .search-input:focus { border-color: var(--accent); }
+  .search-wrap input.search-input:focus { border-color: var(--accent); }
 
   .content { flex: 1; overflow-y: auto; padding: 24px 32px 64px; }
   .container { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
@@ -325,7 +325,7 @@ public sealed class InternalPagesService
 
   .pill {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 2px 8px; border-radius: 99px; font-size: 11.5px; font-weight: 500;
+    padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 500;
     background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
   }
   .list-item {

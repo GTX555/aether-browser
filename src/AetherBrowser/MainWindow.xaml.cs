@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -10,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
@@ -47,6 +49,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private double _effectiveTabWidth = 156;
     private string? _lastFindQuery;
     private volatile bool _isFindBarOpen;
+    private bool _addressBarFocused;
+    private IntPtr _windowHwnd;
+    private static readonly ConcurrentDictionary<IntPtr, MainWindow> WindowsByHwnd = new();
     private static readonly SolidColorBrush BookmarkYellowBrush = CreateFrozenBrush(Color.FromRgb(0xFA, 0xCC, 0x15));
 
     private static SolidColorBrush CreateFrozenBrush(Color color)
@@ -86,8 +91,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public double CompactAddressBarWidth => Math.Clamp(App.SettingsService.Current.AddressBarWidth, 200, 560);
     public double BarControlHeight => App.SettingsService.Current.CompactMode ? 26 : 30;
     public CornerRadius PillCornerRadius => App.SettingsService.Current.RoundedAddressBar
-        ? new CornerRadius(Math.Max(8, (BarControlHeight / 2.0) - 2))
-        : new CornerRadius(7);
+        ? new CornerRadius(8)
+        : new CornerRadius(5);
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void NotifyUi([CallerMemberName] string? name = null) =>
@@ -143,10 +148,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _memoryTimer.Tick += async (_, _) => await MemoryTickAsync();
 
+        SourceInitialized += (_, _) =>
+        {
+            _windowHwnd = new WindowInteropHelper(this).Handle;
+            if (_windowHwnd != IntPtr.Zero)
+                WindowsByHwnd[_windowHwnd] = this;
+            App.CefHost.ShortcutInterceptor = OnCefShortcutIntercepted;
+        };
+        Closed += (_, _) =>
+        {
+            if (_windowHwnd != IntPtr.Zero)
+                WindowsByHwnd.TryRemove(_windowHwnd, out _);
+        };
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
-        Deactivated += (_, _) => { ClearAddressBarFocus(); CancelTabDrag(); };
+        Deactivated += (_, _) => { ClearAddressBarFocus(refocusHost: false); CancelTabDrag(); };
         LocationChanged += (_, _) => { if (AutocompletePopup.IsOpen) AutocompletePopup.IsOpen = false; };
         PreviewMouseDown += Window_PreviewMouseDown;
         PreviewKeyDown += MainWindow_PreviewKeyDown;
@@ -390,10 +407,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // Sync toolbar & address bar immediately so the UI feels instant on frame 0
         AutocompletePopup.IsOpen = false;
         _highlightedAutocompleteIndex = -1;
-        if (!tab.IsBlankTab && AddressBox.IsKeyboardFocusWithin)
+        if (!tab.IsBlankTab && (_addressBarFocused || AddressBox.IsKeyboardFocusWithin))
         {
-            Keyboard.ClearFocus();
+            _addressBarFocused = false;
             AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
+            FocusManager.SetFocusedElement(this, WebViewHostGrid);
+            Keyboard.Focus(WebViewHostGrid);
         }
 
         SyncToolbarToActiveTab(forceAddressUpdate: true);
@@ -417,10 +436,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _ = Dispatcher.BeginInvoke(() =>
             {
                 if (_activeTab == tab)
-                {
-                    AddressBox.Focus();
-                    AddressBox.SelectAll();
-                }
+                    FocusAddressBar();
             }, DispatcherPriority.Input);
             return;
         }
@@ -603,12 +619,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         browser.DisplayHandler = displayHandler;
 
         browser.PermissionHandler = new AetherPermissionHandler();
-        browser.KeyboardHandler = new AetherKeyboardHandler(
-            IsBrowserShortcut,
-            (key, ctrl, shift, alt) => Dispatcher.BeginInvoke(async () => await ExecuteBrowserShortcutAsync(key, ctrl, shift, alt)));
 
         var focusHandler = new AetherFocusHandler();
-        focusHandler.BrowserGotFocus += () => Dispatcher.BeginInvoke(ClearAddressBarFocus);
+        focusHandler.BrowserGotFocus += () => Dispatcher.BeginInvoke(() => ClearAddressBarFocus(refocusHost: false));
         browser.FocusHandler = focusHandler;
 
         var jsBridge = AetherJsBridge.RegisterOn(browser);
@@ -1508,12 +1521,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (AddressBox.IsKeyboardFocusWithin || AddressBarBorder.BorderBrush != (Brush)FindResource("BorderBrush"))
+        if (_addressBarFocused || AddressBox.IsKeyboardFocusWithin || AddressBarBorder.BorderBrush != (Brush)FindResource("BorderBrush"))
         {
             if (e.OriginalSource is DependencyObject src && !IsDescendantOf(src, AddressBarBorder))
             {
                 if (!AutocompletePopup.IsOpen || !AutocompletePopup.IsMouseOver)
-                    ClearAddressBarFocus();
+                    ClearAddressBarFocus(refocusHost: true);
             }
         }
     }
@@ -1529,18 +1542,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return false;
     }
 
-    private void ClearAddressBarFocus()
+    private void ClearAddressBarFocus(bool refocusHost = true)
     {
+        _addressBarFocused = false;
         AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
         AutocompletePopup.IsOpen = false;
         _highlightedAutocompleteIndex = -1;
-        if (AddressBox.IsKeyboardFocusWithin)
-            Keyboard.ClearFocus();
+
+        // Clear BOTH logical FocusManager focus AND keyboard focus off AddressBox so the next click
+        // into AddressBox ALWAYS triggers select-all + highlight (not just the 1st time!)
+        if (FocusManager.GetFocusedElement(this) == AddressBox || AddressBox.IsKeyboardFocusWithin)
+        {
+            FocusManager.SetFocusedElement(this, WebViewHostGrid);
+            if (refocusHost)
+                Keyboard.Focus(WebViewHostGrid);
+            else
+                Keyboard.ClearFocus();
+        }
         SyncToolbarToActiveTab(forceAddressUpdate: true);
     }
 
     private void AddressBox_GotFocus(object sender, RoutedEventArgs e)
     {
+        _addressBarFocused = true;
         AddressBarBorder.BorderBrush = (Brush)FindResource("AccentBrush");
         if (_activeTab is not null && !_activeTab.IsBlankTab)
         {
@@ -1553,11 +1577,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void AddressBox_LostFocus(object sender, RoutedEventArgs e)
     {
+        _addressBarFocused = false;
         AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
         // Defer closing slightly so clicking an item inside AutocompletePopup always fires first!
         _ = Dispatcher.BeginInvoke(() =>
         {
-            if (!AddressBox.IsKeyboardFocusWithin && !AutocompletePopup.IsMouseOver)
+            if (!_addressBarFocused && !AddressBox.IsKeyboardFocusWithin && !AutocompletePopup.IsMouseOver)
             {
                 AutocompletePopup.IsOpen = false;
                 _highlightedAutocompleteIndex = -1;
@@ -1568,10 +1593,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void AddressBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!AddressBox.IsKeyboardFocusWithin)
+        if (!_addressBarFocused || !AddressBox.IsKeyboardFocusWithin)
         {
             e.Handled = true;
-            AddressBox.Focus();
+            FocusAddressBar();
         }
     }
 
@@ -1764,8 +1789,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
+            _addressBarFocused = false;
             AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
-            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(this, WebViewHostGrid);
+            Keyboard.Focus(WebViewHostGrid);
             e.Handled = true;
             var active = _activeTab;
             await NavigateTabAsync(active, target);
@@ -1773,7 +1800,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else if (e.Key == Key.Escape)
         {
-            ClearAddressBarFocus();
+            ClearAddressBarFocus(refocusHost: true);
             _activeTab?.Browser?.Focus();
             e.Handled = true;
         }
@@ -1795,8 +1822,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             e.Handled = true;
             AutocompletePopup.IsOpen = false;
             _highlightedAutocompleteIndex = -1;
+            _addressBarFocused = false;
             AddressBarBorder.BorderBrush = (Brush)FindResource("BorderBrush");
-            Keyboard.ClearFocus();
+            FocusManager.SetFocusedElement(this, WebViewHostGrid);
+            Keyboard.Focus(WebViewHostGrid);
             var active = _activeTab;
             await NavigateTabAsync(active, url);
             active.Browser?.Focus();
@@ -1804,6 +1833,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     // ==================== KEYBOARD SHORTCUTS ====================
+
+    private static bool OnCefShortcutIntercepted(IntPtr foregroundHwnd, Key key, bool ctrl, bool shift, bool alt, bool isRepeat)
+    {
+        if (!WindowsByHwnd.TryGetValue(foregroundHwnd, out var win))
+            return false;
+
+        if (!win.IsBrowserShortcut(key, ctrl, shift, alt))
+            return false;
+
+        // Avoid accidentally closing/opening multiple tabs if user holds Ctrl+W / Ctrl+T slightly too long
+        bool repeatable = key is Key.Tab or Key.PageUp or Key.PageDown or Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract;
+        if (!isRepeat || repeatable)
+        {
+            win.Dispatcher.BeginInvoke(async () => await win.ExecuteBrowserShortcutAsync(key, ctrl, shift, alt));
+        }
+
+        return true;
+    }
 
     private bool IsBrowserShortcut(Key key, bool ctrl, bool shift, bool alt)
     {
@@ -1899,6 +1946,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void FocusAddressBar()
     {
         if (!IsActive) Activate();
+        _addressBarFocused = true;
+        AddressBarBorder.BorderBrush = (Brush)FindResource("AccentBrush");
+        if (_activeTab is not null && !_activeTab.IsBlankTab)
+        {
+            _isUpdatingAddressBox = true;
+            AddressBox.Text = _activeTab.Url;
+            _isUpdatingAddressBox = false;
+        }
+        FocusManager.SetFocusedElement(this, AddressBox);
         Keyboard.Focus(AddressBox);
         AddressBox.Focus();
         AddressBox.SelectAll();
@@ -2826,11 +2882,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void RefreshDownloadsUi()
     {
-        var recent = App.DataStore.Downloads.Take(20).ToList();
+        var session = App.DataStore.SessionDownloads.Take(20).ToList();
         DownloadsPopupList.ItemsSource = null;
-        DownloadsPopupList.ItemsSource = recent;
-        DownloadsEmptyText.Visibility = recent.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        DownloadActiveDot.Visibility = recent.Any(d => d.IsInProgress) ? Visibility.Visible : Visibility.Collapsed;
+        DownloadsPopupList.ItemsSource = session;
+        DownloadsEmptyText.Visibility = session.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        DownloadActiveDot.Visibility = session.Any(d => d.IsInProgress) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void DownloadsPopup_OpenFolder_Click(object sender, RoutedEventArgs e)
@@ -2846,7 +2902,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void DownloadsPopup_Clear_Click(object sender, RoutedEventArgs e)
     {
-        App.DataStore.ClearDownloads();
+        App.DataStore.ClearSessionDownloads();
         RefreshDownloadsUi();
     }
 
